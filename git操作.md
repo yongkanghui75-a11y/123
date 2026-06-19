@@ -7,7 +7,7 @@ git rm 文件名                                     //删除
 git status                                //查看状态
 
 
-
+更新（第一次需跟github仓库连接）
 git add .
 git commit -m "本次修改说明"
 git push
