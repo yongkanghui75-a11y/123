@@ -1,31 +1,27 @@
-# legged_gym 学习笔记：从 `anymal_c_flat` 注册到奖励配置
+# legged_gym 第一轮代码主线学习笔记
 
-## 1. 我现在学的主线
+## 1. 总体主线
 
-我现在要搞清楚的是：
-
-```text
-运行命令里的 --task=anymal_c_flat
-到底是怎么一步步找到 ANYmal C 平地机器人任务的？
-```
-
-整体流程是：
+我现在学习的是 `legged_gym` 中一条完整的机器人强化学习训练流程：
 
 ```text
-train.py
-读取 --task=anymal_c_flat
+任务注册
 ↓
-task_registry.py
-根据任务名查登记表
+创建环境
 ↓
-envs/__init__.py
-注册 anymal_c_flat 任务
+创建 PPO 训练器
 ↓
-anymal_c_flat_config.py
-定义 ANYmal C 平地任务配置
+机器人获得 observation
 ↓
-legged_robot.py
-真正执行环境逻辑、observation、reward、action
+策略网络输出 action
+↓
+action 变成关节力矩 torque
+↓
+Isaac Gym 推进物理仿真
+↓
+计算 reward
+↓
+返回新的 observation、reward、done 给 PPO
 ```
 
 ---
@@ -38,17 +34,15 @@ legged_robot.py
 legged_gym/scripts/train.py
 ```
 
-这个文件是训练入口，相当于“开始训练按钮”。
-
-核心代码是：
+核心代码：
 
 ```python
-env, env_cfg = task_registry.make_env(name=args.task, args=args)
-ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args)
-ppo_runner.learn(num_learning_iterations=train_cfg.runner.max_iterations, init_at_random_ep_len=True)
+env, env_cfg = task_registry.make_env(...)
+ppo_runner, train_cfg = task_registry.make_alg_runner(...)
+ppo_runner.learn(...)
 ```
 
-对应含义：
+作用：
 
 ```text
 make_env()
@@ -58,10 +52,10 @@ make_alg_runner()
 创建 PPO 训练器
 
 learn()
-正式开始训练
+开始训练
 ```
 
-所以 `train.py` 本身不负责具体奖励，也不负责机器人动作细节，它主要负责把环境和 PPO 训练器连接起来。
+`train.py` 是训练入口，不负责具体奖励、动作和机器人细节。
 
 ---
 
@@ -73,9 +67,13 @@ learn()
 legged_gym/utils/task_registry.py
 ```
 
-这里的 `TaskRegistry` 可以理解成“任务登记本”。
+核心作用：
 
-它里面有三张表：
+```text
+根据任务名找到对应的环境代码、环境配置、PPO 配置。
+```
+
+内部有三张表：
 
 ```python
 self.task_classes = {}
@@ -83,77 +81,17 @@ self.env_cfgs = {}
 self.train_cfgs = {}
 ```
 
-含义是：
+含义：
 
 ```text
-task_classes
-任务名 → 环境代码
-
-env_cfgs
-任务名 → 环境配置
-
-train_cfgs
-任务名 → PPO训练配置
-```
-
-比如 `anymal_c_flat` 会对应：
-
-```text
-anymal_c_flat
-→ LeggedRobot
-→ AnymalCFlatCfg
-→ AnymalCFlatCfgPPO
+task_classes：任务名 → 环境类
+env_cfgs：任务名 → 环境配置
+train_cfgs：任务名 → PPO 配置
 ```
 
 ---
 
-## 4. 任务注册：`register()`
-
-文件位置：
-
-```text
-legged_gym/utils/task_registry.py
-```
-
-核心代码：
-
-```python
-def register(self, name, task_class, env_cfg, train_cfg):
-    self.task_classes[name] = task_class
-    self.env_cfgs[name] = env_cfg
-    self.train_cfgs[name] = train_cfg
-```
-
-作用：
-
-```text
-把一个任务名登记进去。
-以后用户输入这个任务名，程序就知道该用哪个环境、哪个配置、哪个训练参数。
-```
-
-比如：
-
-```python
-task_registry.register(
-    "anymal_c_flat",
-    LeggedRobot,
-    AnymalCFlatCfg(),
-    AnymalCFlatCfgPPO()
-)
-```
-
-大白话：
-
-```text
-如果用户输入 --task=anymal_c_flat，
-就用 LeggedRobot 作为环境代码，
-用 AnymalCFlatCfg 作为环境配置，
-用 AnymalCFlatCfgPPO 作为 PPO 训练配置。
-```
-
----
-
-## 5. `anymal_c_flat` 注册位置
+## 4. 任务注册：`envs/__init__.py`
 
 文件位置：
 
@@ -161,15 +99,7 @@ task_registry.register(
 legged_gym/envs/__init__.py
 ```
 
-这个文件负责把任务注册进 `task_registry`。
-
-可以用命令查找：
-
-```bash
-grep -R "anymal_c_flat" -n legged_gym/envs
-```
-
-找到后会看到类似：
+`anymal_c_flat` 在这里被注册：
 
 ```python
 task_registry.register(
@@ -180,120 +110,20 @@ task_registry.register(
 )
 ```
 
-这就是 `anymal_c_flat` 和 ANYmal C 平地任务绑定起来的位置。
-
----
-
-## 6. 创建环境：`make_env()`
-
-文件位置：
+含义：
 
 ```text
-legged_gym/utils/task_registry.py
-```
+--task=anymal_c_flat
 
-作用：
-
-```text
-根据任务名创建真正的机器人仿真环境。
-```
-
-主要流程：
-
-```text
-读取终端参数
-↓
-检查 anymal_c_flat 是否已经注册
-↓
-找到对应环境类 LeggedRobot
-↓
-找到对应环境配置 AnymalCFlatCfg
-↓
-用命令行参数覆盖配置
-↓
-解析 Isaac Gym 仿真参数
-↓
-创建环境 env
-```
-
-关键代码：
-
-```python
-env = task_class(
-    cfg=env_cfg,
-    sim_params=sim_params,
-    physics_engine=args.physics_engine,
-    sim_device=args.sim_device,
-    headless=args.headless
-)
-```
-
-大白话：
-
-```text
-make_env() = 建训练场 + 把机器人放进去
-```
-
-这里的训练场包括：
-
-```text
-机器人模型
-地形
-物理仿真
-奖励规则
-观测数据
-GPU设置
-并行环境数量
+对应：
+环境代码：LeggedRobot
+环境配置：AnymalCFlatCfg
+PPO 配置：AnymalCFlatCfgPPO
 ```
 
 ---
 
-## 7. 创建 PPO 训练器：`make_alg_runner()`
-
-文件位置：
-
-```text
-legged_gym/utils/task_registry.py
-```
-
-作用：
-
-```text
-创建 PPO 训练器。
-```
-
-核心代码：
-
-```python
-runner = OnPolicyRunner(env, train_cfg_dict, log_dir, device=args.rl_device)
-```
-
-大白话：
-
-```text
-make_alg_runner() = 找 PPO 教练 + 制定训练计划
-```
-
-它负责准备：
-
-```text
-训练环境 env
-PPO 参数 train_cfg_dict
-日志保存目录 log_dir
-训练设备 cuda/cpu
-```
-
-后面 `train.py` 调用：
-
-```python
-ppo_runner.learn(...)
-```
-
-才真正开始训练。
-
----
-
-## 8. ANYmal C 平地任务配置：`anymal_c_flat_config.py`
+## 5. 平地任务配置：`anymal_c_flat_config.py`
 
 文件位置：
 
@@ -301,210 +131,491 @@ ppo_runner.learn(...)
 legged_gym/envs/anymal_c/flat/anymal_c_flat_config.py
 ```
 
-这个文件定义：
+这个文件定义 ANYmal C 平地任务怎么训练。
 
-```text
-ANYmal C 在平地任务中怎么训练。
-```
-
-它有两大部分：
+主要包括：
 
 ```python
-class AnymalCFlatCfg(AnymalCRoughCfg):
+class AnymalCFlatCfg
+class AnymalCFlatCfgPPO
 ```
 
-这是环境配置。
+### 环境配置
 
 ```python
-class AnymalCFlatCfgPPO(AnymalCRoughCfgPPO):
-```
-
-这是 PPO 训练配置。
-
----
-
-## 9. 环境配置：`AnymalCFlatCfg`
-
-### 观测数量
-
-```python
-class env(AnymalCRoughCfg.env):
-    num_observations = 48
+num_observations = 48
+mesh_type = 'plane'
+measure_heights = False
 ```
 
 含义：
 
 ```text
-机器人每一步能看到 48 个数字。
-```
-
-这些数字之后会输入神经网络。
-
----
-
-### 地形配置
-
-```python
-class terrain(AnymalCRoughCfg.terrain):
-    mesh_type = 'plane'
-    measure_heights = False
-```
-
-含义：
-
-```text
+机器人每一步看到 48 个数字。
 地形是平地。
-不需要测周围地形高度。
+平地任务不需要测地形高度。
 ```
 
-这就是任务名里 `flat` 的含义。
-
----
-
-### 奖励配置
+### 奖励权重
 
 ```python
-class rewards(AnymalCRoughCfg.rewards):
-    max_contact_force = 350.
-
-    class scales(AnymalCRoughCfg.rewards.scales):
-        orientation = -5.0
-        torques = -0.000025
-        feet_air_time = 2.
-```
-
-这里写的是“奖励权重”，不是完整奖励函数。
-
-含义：
-
-```text
 orientation = -5.0
-身体歪了会被重罚，鼓励机器人保持稳定。
-
 torques = -0.000025
-关节用力太大会被惩罚，鼓励机器人省力。
-
 feet_air_time = 2.
-脚离地时间合适会被奖励，鼓励机器人迈步。
-
-max_contact_force = 350.
-脚和地面的接触力不能太大。
-```
-
-关键理解：
-
-```text
-reward 不是单纯的分数。
-reward 是用来塑造机器人行为的。
-```
-
----
-
-## 10. PPO 配置：`AnymalCFlatCfgPPO`
-
-核心代码：
-
-```python
-actor_hidden_dims = [128, 64, 32]
-critic_hidden_dims = [128, 64, 32]
-activation = 'elu'
-entropy_coef = 0.01
-experiment_name = 'flat_anymal_c'
-max_iterations = 300
 ```
 
 含义：
 
 ```text
-actor_hidden_dims
-动作网络大小，actor 负责输出动作。
+orientation
+身体歪了会被惩罚。
 
-critic_hidden_dims
-价值网络大小，critic 负责判断状态好不好。
+torques
+关节用力太大会被惩罚。
 
-entropy_coef
-鼓励机器人探索，不要太早变得死板。
+feet_air_time
+鼓励机器人迈步，而不是拖着脚滑。
+```
 
-experiment_name = 'flat_anymal_c'
-训练日志保存到 logs/flat_anymal_c。
+注意：
 
-max_iterations = 300
-默认训练 300 轮。
+```text
+config.py 里写的是奖励权重；
+legged_robot.py 里才是真正计算奖励。
 ```
 
 ---
 
-## 11. 目前最重要的结论
+## 6. 奖励准备：`_prepare_reward_function()`
 
-```text
-anymal_c_flat_config.py 里写的是奖励权重。
-legged_robot.py 里的 compute_reward() 才是真正计算奖励的地方。
-```
-
-也就是说：
-
-```text
-config.py = 写评分标准
-legged_robot.py = 真正打分
-```
-
----
-
-## 12. 下一步要看的文件
-
-下一步看：
+文件位置：
 
 ```text
 legged_gym/envs/base/legged_robot.py
 ```
 
-重点函数：
+作用：
+
+```text
+把配置文件里的奖励名字，自动连接到真正的奖励函数。
+```
+
+规则：
+
+```text
+配置名 orientation
+↓
+函数名 _reward_orientation()
+
+配置名 torques
+↓
+函数名 _reward_torques()
+
+配置名 feet_air_time
+↓
+函数名 _reward_feet_air_time()
+```
+
+核心理解：
+
+```text
+配置文件决定算哪些 reward，以及每项权重是多少。
+_prepare_reward_function() 负责把这些 reward 准备成函数列表。
+```
+
+---
+
+## 7. 奖励计算：`compute_reward()`
+
+文件位置：
+
+```text
+legged_gym/envs/base/legged_robot.py
+```
+
+核心逻辑：
 
 ```python
-compute_reward()
+rew = self.reward_functions[i]() * self.reward_scales[name]
+self.rew_buf += rew
 ```
 
-学习目标：
+含义：
 
 ```text
-理解奖励到底是怎么计算出来的。
+调用每个奖励函数
+↓
+乘以配置里的权重
+↓
+加到总 reward 里
 ```
 
-之后再看：
+最重要理解：
+
+```text
+_reward_xxx() 负责“怎么算”；
+rewards.scales 负责“权重多大”；
+compute_reward() 负责“统一加总”。
+```
+
+---
+
+## 8. 已看的几个奖励函数
+
+文件位置：
+
+```text
+legged_gym/envs/base/legged_robot.py
+```
+
+### `_reward_tracking_lin_vel()`
+
+作用：
+
+```text
+鼓励机器人实际平移速度接近目标速度。
+```
+
+使用：
+
+```text
+commands[:, :2]：目标 x/y 速度
+base_lin_vel[:, :2]：实际 x/y 速度
+```
+
+---
+
+### `_reward_tracking_ang_vel()`
+
+作用：
+
+```text
+鼓励机器人实际转向速度接近目标转向速度。
+```
+
+使用：
+
+```text
+commands[:, 2]：目标 yaw 角速度
+base_ang_vel[:, 2]：实际 yaw 角速度
+```
+
+---
+
+### `_reward_orientation()`
+
+作用：
+
+```text
+惩罚身体歪斜，让机器人保持稳定。
+```
+
+---
+
+### `_reward_torques()`
+
+作用：
+
+```text
+惩罚关节用力太大，让动作更省力。
+```
+
+---
+
+### `_reward_feet_air_time()`
+
+作用：
+
+```text
+奖励脚抬起来再落地，让机器人学会迈步。
+```
+
+核心理解：
+
+```text
+tracking_lin_vel 和 tracking_ang_vel 让机器人按命令走；
+orientation 让机器人别倒；
+torques 让机器人省力；
+feet_air_time 让机器人真正迈步。
+```
+
+---
+
+## 9. Observation：`compute_observations()`
+
+文件位置：
+
+```text
+legged_gym/envs/base/legged_robot.py
+```
+
+作用：
+
+```text
+把机器人当前能看到的信息拼成 obs_buf，交给策略网络。
+```
+
+主要包含：
+
+```text
+base_lin_vel：身体线速度
+base_ang_vel：身体角速度
+projected_gravity：身体姿态/是否歪斜
+commands：目标速度命令
+dof_pos：关节位置
+dof_vel：关节速度
+actions：上一时刻动作
+```
+
+ANYmal C 平地任务是 48 维 observation：
+
+```text
+3 + 3 + 3 + 3 + 12 + 12 + 12 = 48
+```
+
+---
+
+## 10. 动作执行：`step(actions)`
+
+文件位置：
+
+```text
+legged_gym/envs/base/legged_robot.py
+```
+
+作用：
+
+```text
+接收策略网络输出的 actions，
+把动作执行到机器人身上，
+然后返回新的 obs、reward、done。
+```
+
+核心流程：
+
+```text
+裁剪 action
+↓
+_compute_torques(actions)
+↓
+把 torque 发给 Isaac Gym
+↓
+simulate 推进物理仿真
+↓
+post_physics_step()
+↓
+返回 obs、reward、reset_buf
+```
+
+---
+
+## 11. Action 变 Torque：`_compute_torques()`
+
+文件位置：
+
+```text
+legged_gym/envs/base/legged_robot.py
+```
+
+核心理解：
+
+```text
+在 P 控制下，action 不是直接力矩。
+action 表示默认站姿基础上的关节目标位置偏移。
+```
+
+核心公式逻辑：
+
+```text
+目标关节角度 = default_dof_pos + action * action_scale
+
+torque =
+P 增益 × 当前关节离目标还有多远
+-
+D 增益 × 当前关节速度
+```
+
+作用：
+
+```text
+把神经网络输出的 action 转换成真正施加到关节上的力矩。
+```
+
+---
+
+## 12. 控制配置：`class control`
+
+文件位置：
+
+```text
+legged_gym/envs/base/legged_robot_config.py
+```
+
+核心配置：
 
 ```python
-compute_observations()
+control_type = 'P'
+stiffness = {...}
+damping = {...}
+action_scale = 0.5
+decimation = 4
 ```
 
-学习目标：
+含义：
 
 ```text
-理解机器人每一步到底“看到”了什么。
+control_type = 'P'
+使用位置控制。
+
+stiffness
+P 增益，关节追目标位置的力度。
+
+damping
+D 增益，防止关节乱甩和抖动。
+
+action_scale
+控制 action 对目标关节角度的影响大小。
+
+decimation = 4
+策略输出一次 action，仿真执行 4 个物理小步。
 ```
 
-再看：
+---
+
+## 13. 物理后处理：`post_physics_step()`
+
+文件位置：
+
+```text
+legged_gym/envs/base/legged_robot.py
+```
+
+作用：
+
+```text
+机器人动完以后，更新状态、算 reward、算 observation、判断 reset。
+```
+
+核心流程：
+
+```text
+刷新机器人状态
+刷新接触力
+更新速度、姿态、重力方向
+调用 _post_physics_step_callback()
+检查是否摔倒/超时
+计算 reward
+重置需要 reset 的机器人
+计算新的 observation
+保存上一时刻动作和速度
+```
+
+---
+
+## 14. Commands 更新：`_post_physics_step_callback()`
+
+文件位置：
+
+```text
+legged_gym/envs/base/legged_robot.py
+```
+
+作用：
+
+```text
+在计算 reward 和 observation 之前，更新 commands 等信息。
+```
+
+核心代码：
 
 ```python
-step()
-_compute_torques()
+env_ids = (...)
+self._resample_commands(env_ids)
 ```
 
-学习目标：
+含义：
 
 ```text
-理解 action 是怎么变成机器人关节力矩的。
+每隔 resampling_time 秒，重新给机器人生成目标速度命令。
 ```
 
-最后看：
+对于 `anymal_c_flat`：
 
-```text
-rsl_rl/rsl_rl/runners/on_policy_runner.py
-rsl_rl/rsl_rl/algorithms/ppo.py
+```python
+resampling_time = 4.
+heading_command = False
 ```
 
-学习目标：
+含义：
 
 ```text
-理解 PPO 是怎么更新策略网络的。
+每 4 秒换一次目标速度。
+不使用目标朝向模式，直接使用目标 yaw 角速度。
+```
+
+commands 会被两个地方使用：
+
+```text
+1. 放进 observation，让策略知道目标是什么。
+2. 用于 reward，检查实际速度是否跟上目标速度。
+```
+
+---
+
+## 15. 当前已经打通的环境主线
+
+目前已经看懂的主线：
+
+```text
+任务名 anymal_c_flat
+↓
+注册到 LeggedRobot + AnymalCFlatCfg + AnymalCFlatCfgPPO
+↓
+make_env() 创建环境
+↓
+compute_observations() 生成 obs
+↓
+actor 根据 obs 输出 action
+↓
+step(actions) 执行动作
+↓
+_compute_torques() 把 action 转成 torque
+↓
+Isaac Gym 推进仿真
+↓
+post_physics_step() 更新状态
+↓
+compute_reward() 计算奖励
+↓
+返回 obs、reward、done 给 PPO
+```
+
+---
+
+## 16. 当前阶段最重要的一句话
+
+```text
+observation 是机器人看到什么；
+action 是策略想让机器人怎么动；
+torque 是真正施加到关节上的力；
+reward 是评价这一步做得好不好；
+PPO 用 reward 去更新策略网络。
+```
+
+---
+
+## 17. 后面还需要看的内容
+
+接下来还剩三块：
+
+```text
+1. _resample_commands()
+看目标速度 commands 是怎么随机生成的。
+
+2. check_termination() 和 reset_idx()
+看机器人什么时候摔倒、什么时候重置。
+
+3. rsl_rl 中的 PPO 主线
+看 obs 怎么进网络，action 怎么输出，reward 怎么用于更新策略。
 ```
 
